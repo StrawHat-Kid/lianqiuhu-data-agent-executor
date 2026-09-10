@@ -1,0 +1,35 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 18034
+  },
+  "deepseek": {
+    "base_url": "https://api.deepseek.com",
+    "api_key": "REPLACE_WITH_LOCAL_DEEPSEEK_API_KEY",
+    "model": "deepseek-v4-flash",
+    "thinking": "enabled",
+    "reasoning_effort": "medium",
+    "max_tokens": 8192,
+    "stream": true,
+    "timeout_seconds": 300,
+    "max_retries": 2,
+    "retry_delay_seconds": 2,
+    "system_prompt": "你是一个严谨的数据智能分析助手。用户每次提问时，都会在问题末尾附上知识库全部文件内容。请务必以知识库内容为依据作答，认真阅读并精确计算，不要编造数据；如果知识库中没有相关信息，请如实说明。回答时直接给出结论和计算过程摘要。使用用户提问的语言来回答，用户如果使用英文提问，请也使用英文生成回答。最长回答不要超过500字"
+  },
+  "knowledge_base": {
+    "dir": "knowedge",
+    "max_file_chars": 500000,
+    "max_total_chars": 1200000
+  },
+  "upload": {
+    "dir": "data/uploads",
+    "max_file_size_mb": 64,
+    "max_file_chars": 500000
+  },
+  "sessions": {
+    "max_history": 20
+  },
+  "callback": {
+    "token": "REPLACE_WITH_CALLBACK_X_AUTH_TOKEN_OR_LEAVE_EMPTY"
+  }
+}
