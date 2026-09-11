@@ -2,7 +2,7 @@
 
 ## 用途与技术栈
 
-本执行器用于基于练秋湖业务数据进行单轮问数。它是一个 FastAPI + Uvicorn HTTP 执行器，通过 DeepSeek Chat Completions API 生成回答。
+本执行器用于基于练秋湖业务数据进行单轮问数。它是一个 FastAPI + Uvicorn HTTP 执行器，通过 SiliconFlow（硅基流动）OpenAI Compatible Chat Completions API 生成回答。
 
 当前实现会在每次提问时读取 `knowedge/` 顶层的全部普通文件，将文件内容拼接到本次用户消息中。它不是向量知识库：没有 embedding、向量数据库、索引、SQL 或自动分块检索。
 
@@ -23,7 +23,7 @@ lianqiuhu-data-agent-executor/
 
 目录名必须保持为 `knowedge`。这是当前配置和核心代码使用的名称。
 
-首次部署时，将 `config.example.json` 复制为 `config.json`，再填写部署环境提供的 DeepSeek API Key。不得提交真实 Key。默认监听为 `0.0.0.0:18034`。
+首次部署时，将 `config.example.json` 复制为 `config.json`，再填写部署环境提供的 SiliconFlow API Key。不得提交真实 Key。当前模型服务商为 SiliconFlow（硅基流动），OpenAI Compatible Base URL 为 `https://api.siliconflow.cn/v1`，模型为 `deepseek-ai/DeepSeek-V4-Flash`。原 DeepSeek 官方 API 不再作为当前 HC 调用地址。默认监听为 `0.0.0.0:18034`。
 
 `callback.token` 只用于执行器向 `context.callback` 回传结果时的 `X-Auth-Token`。它不是产品侧 INGRESS_TOKEN；当前执行器代码没有实现入站 INGRESS_TOKEN 鉴权。
 
@@ -102,7 +102,7 @@ Linux 可在安装依赖后，从项目根目录执行 `python main.py`。相对
 - endpoint：`http://<执行器可达地址>:18034/api/commands`
 - command 名称必须与 `AI智能问答`、`AI问答会话重置` 完全一致。
 - 如需回程，产品侧传入上述 context 信封。
-- 上游 DeepSeek 可流式读取，但本执行器对产品侧返回的是普通 HTTP JSON，不提供对外 SSE。
+- 上游 SiliconFlow 可流式读取，但本执行器对产品侧返回的是普通 HTTP JSON，不提供对外 SSE。
 
 ## 数据规模限制
 
