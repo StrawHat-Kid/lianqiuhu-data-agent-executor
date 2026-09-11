@@ -1,0 +1,36 @@
+﻿event_id,scenario_id,time_label,topic,component,location,event_type,status,detail,data_flag
+LQH-E-0001,DEMO-LQH-02-001,系统时间事件-19:23:23,综合安防,安防告警,A区J03,机器人员巡更,已处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0002,DEMO-LQH-02-001,系统时间事件-09:23:23,综合安防,安防告警,B区J03,视频周界,未处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0003,DEMO-LQH-02-001,系统时间事件-09:23:23,综合安防,安防告警,H区J04,设备告警,处理中,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0004,DEMO-LQH-02-001,系统时间事件-09:23:23,综合安防,安防告警,L区J03,通行告警,已处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0005,DEMO-LQH-02-001,系统时间事件-09:23:23,综合安防,安防告警,M区J022,能耗告警,未处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0006,DEMO-LQH-03-002,系统时间事件-08:15:22,便捷通行,通行告警,D区,权限过期,已处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0007,DEMO-LQH-03-002,系统时间事件-08:52:10,便捷通行,通行告警,A区,设备故障,已处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0008,DEMO-LQH-03-002,系统时间事件-09:34:05,便捷通行,通行告警,E区,违停,已处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0009,DEMO-LQH-03-002,系统时间事件-10:12:45,便捷通行,通行告警,B区,其它,已处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0010,DEMO-LQH-03-002,系统时间事件-10:58:30,便捷通行,通行告警,F区,违停,已处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0011,DEMO-LQH-03-002,系统时间事件-11:45:12,便捷通行,通行告警,C区,尾随,已处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0012,DEMO-LQH-03-002,系统时间事件-12:20:55,便捷通行,通行告警,G区,设备故障,处理中,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0013,DEMO-LQH-03-002,系统时间事件-13:05:18,便捷通行,通行告警,H区,权限过期,处理中,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0014,DEMO-LQH-03-002,系统时间事件-13:42:09,便捷通行,通行告警,E区,违停,待处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0015,DEMO-LQH-03-002,系统时间事件-14:05:33,便捷通行,通行告警,D区,其它,待处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0016,DEMO-LQH-04-004,系统时间事件-09:12:33,资产管理,资产异常事件,组团D,异常离位,已处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0017,DEMO-LQH-04-004,系统时间事件-14:45:10,资产管理,资产异常事件,组团E,盘点遗失,已处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0018,DEMO-LQH-04-004,系统时间事件-18:20:05,资产管理,资产异常事件,组团B,标签掉线,已处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0019,DEMO-LQH-04-004,系统时间事件-08:30:15,资产管理,资产异常事件,组团F,出门逾期,已处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0020,DEMO-LQH-04-004,系统时间事件-11:15:42,资产管理,资产异常事件,组团D,异常离位,已处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0021,DEMO-LQH-04-004,系统时间事件-16:55:20,资产管理,资产异常事件,组团G,标签掉线,处理中,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0022,DEMO-LQH-04-004,系统时间事件-09:05:11,资产管理,资产异常事件,组团E,出门逾期,处理中,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0023,DEMO-LQH-04-004,系统时间事件-10:30:45,资产管理,资产异常事件,组团C,盘点遗失,待处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0024,DEMO-LQH-04-004,系统时间事件-13:10:22,资产管理,资产异常事件,组团F,异常离位,待处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0025,DEMO-LQH-04-004,系统时间事件-14:25:08,资产管理,资产异常事件,组团D,标签掉线,待处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0026,DEMO-LQH-05-001,系统时间事件-09:12:45,设施管理,设施运行,G区 1#无功补偿柜,系统事件,待处理,升温速率较基准加快 18%,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0027,DEMO-LQH-05-001,系统时间事件-08:30:22,设施管理,设施运行,G区 2#无功补偿柜,系统事件,已处理,设备运行温度正常，无异常告警,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0028,DEMO-LQH-05-001,系统时间事件-07:15:10,设施管理,设施运行,G区 3#无功补偿柜,系统事件,排查中,功率因数偏低，建议检查电容器组,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0029,DEMO-LQH-05-001,系统时间事件-06:00:55,设施管理,设施运行,G区 1#无功补偿柜,系统事件,待处理,电网谐波含量略高，需关注滤波器状态,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0030,DEMO-LQH-05-001,系统时间事件-23:45:30,设施管理,设施运行,G区 2#无功补偿柜,系统事件,已处理,例行巡检完成，设备状态良好,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0031,DEMO-LQH-08-004,系统时间事件-06:27:14,网络体验,网络设备与终端,系统区域,网页无法访问,待处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0032,DEMO-LQH-08-004,系统时间事件-02:32:28,网络体验,网络设备与终端,系统区域,下载速度过慢,待处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0033,DEMO-LQH-08-004,系统时间事件-21:04:25,网络体验,网络设备与终端,系统区域,NCE Campus设备异常,待处理,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0034,DEMO-LQH-08-004,系统时间事件-18:16:50,网络体验,网络设备与终端,系统区域,网页无法访问,已完成,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
+LQH-E-0035,DEMO-LQH-08-004,系统时间事件-15:32:46,网络体验,网络设备与终端,系统区域,下载速度过慢,处理中,系统事件记录,SYNTHETIC_DEMO_DO_NOT_USE_AS_FACT
