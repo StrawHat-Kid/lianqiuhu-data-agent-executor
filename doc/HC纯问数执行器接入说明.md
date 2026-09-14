@@ -23,6 +23,15 @@ lianqiuhu-data-agent-executor/
 
 目录名必须保持为 `knowedge`。这是当前配置和核心代码使用的名称。
 
+`knowedge/` 顶层只能放入以下 4 个正式知识文件，执行器会按文件名排序后全文读取：
+
+1. `00_回答规则.md`
+2. `01_权威指标事实表.csv`（696 条事实）
+3. `02_事件告警表.csv`（35 条事件）
+4. `03_指标词典与口径.csv`（315 条指标词典）
+
+不得保留旧版 7 文件，也不要把 ZIP、`validation/` 文件或子目录放入 `knowedge/`，否则会被一并注入模型上下文。设施管理的“工单数量”“告警数”“时长”中 01～31 表示本月第 1～31 日，属于月内日序列，不是小时序列。
+
 首次部署时，将 `config.example.json` 复制为 `config.json`，再填写部署环境提供的 SiliconFlow API Key。不得提交真实 Key。当前模型服务商为 SiliconFlow（硅基流动），OpenAI Compatible Base URL 为 `https://api.siliconflow.cn/v1`，模型为 `deepseek-ai/DeepSeek-V4-Flash`。原 DeepSeek 官方 API 不再作为当前 HC 调用地址。默认监听为 `0.0.0.0:18034`。
 
 `callback.token` 只用于执行器向 `context.callback` 回传结果时的 `X-Auth-Token`。它不是产品侧 INGRESS_TOKEN；当前执行器代码没有实现入站 INGRESS_TOKEN 鉴权。
