@@ -13,6 +13,7 @@ import sys
 import threading
 import traceback
 from typing import List, Optional
+from urllib.parse import urlsplit
 
 import requests
 from fastapi import FastAPI, Request, UploadFile, File
@@ -20,6 +21,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from deepseek_client import DeepSeekClient, DeepSeekError
+from exhibition_auth import PLACEHOLDER_VALUE_PATTERN, TOKEN_HEADER, parse_token_map, resolve_exhibition_id
 from file_store import FileStore
 from sessions import SessionStore
 
@@ -72,6 +74,7 @@ DEFAULT_CONFIG = {
     "upload": {"dir": "data/uploads", "max_file_size_mb": 64, "max_file_chars": 500000},
     "sessions": {"max_history": 20},
     "callback": {"token": ""},
+    "exhibitions": {"token_map": {}, "halls": {}},
 }
 
 
@@ -104,6 +107,90 @@ SESSION_CFG = CONFIG["sessions"]
 SERVER_CFG = CONFIG["server"]
 CALLBACK_TOKEN = (CONFIG.get("callback") or {}).get("token", "")
 
+EXHIBITIONS_CFG = CONFIG.get("exhibitions") or {}
+TOKEN_MAP = parse_token_map(EXHIBITIONS_CFG.get("token_map"))
+
+
+def parse_callback_allowlist(raw, hall_id: str) -> list:
+    if raw is None or (isinstance(raw, list) and len(raw) == 0):
+        raise ValueError(f"exhibitions.halls.{hall_id}.callback_allowlist is required")
+    if not isinstance(raw, list):
+        raise ValueError(f"exhibitions.halls.{hall_id}.callback_allowlist must be a list")
+    allowlist = []
+    for entry in raw:
+        if not isinstance(entry, str) or not entry.strip():
+            raise ValueError(f"exhibitions.halls.{hall_id}.callback_allowlist contains an invalid entry")
+        value = entry.strip()
+        parsed = urlsplit(value)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(f"exhibitions.halls.{hall_id}.callback_allowlist entry must be an http(s) URL")
+        if PLACEHOLDER_VALUE_PATTERN.match(parsed.hostname or ""):
+            raise ValueError(f"exhibitions.halls.{hall_id}.callback_allowlist contains a placeholder host")
+        allowlist.append(value)
+    return allowlist
+
+
+def parse_halls(raw) -> dict:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("exhibitions.halls must be an object")
+    halls = {}
+    for hall_id, cfg in raw.items():
+        hall_id = str(hall_id)
+        if not isinstance(cfg, dict):
+            raise ValueError(f"exhibitions.halls.{hall_id} must be an object")
+        agent = str(cfg.get("agent") or "").strip()
+        if not agent:
+            raise ValueError(f"exhibitions.halls.{hall_id}.agent is required")
+        if PLACEHOLDER_VALUE_PATTERN.match(agent):
+            raise ValueError(f"exhibitions.halls.{hall_id}.agent contains a placeholder value")
+        halls[hall_id] = {
+            "agent": agent,
+            "callback_token": str(cfg.get("callback_token") or "").strip(),
+            "callback_allowlist": parse_callback_allowlist(cfg.get("callback_allowlist"), hall_id),
+        }
+    missing = sorted(set(TOKEN_MAP.values()) - set(halls))
+    if missing:
+        raise ValueError("exhibitions.halls is missing configuration for: " + ", ".join(missing))
+    return halls
+
+
+HALLS = parse_halls(EXHIBITIONS_CFG.get("halls"))
+
+
+def hall_config(exhibition_id: Optional[str]) -> dict:
+    if not exhibition_id:
+        return {}
+    value = HALLS.get(exhibition_id)
+    return value if isinstance(value, dict) else {}
+
+
+def _origin(url) -> tuple:
+    port = url.port or (443 if url.scheme == "https" else 80)
+    return (url.scheme, (url.hostname or "").lower(), port)
+
+
+def callback_allowed(callback: str, allowlist: list) -> bool:
+    if not isinstance(allowlist, list) or not allowlist:
+        return False
+    try:
+        target = urlsplit(callback)
+    except ValueError:
+        return False
+    if target.scheme not in ("http", "https"):
+        return False
+    for entry in allowlist:
+        allowed = urlsplit(entry)
+        if _origin(target) != _origin(allowed):
+            continue
+        base_path = allowed.path or "/"
+        if target.path == allowed.path or target.path.startswith(
+            base_path if base_path.endswith("/") else base_path + "/"
+        ):
+            return True
+    return False
+
 client = DeepSeekClient(DEEPSEEK_CFG)
 file_store = FileStore(UPLOAD_CFG)
 sessions = SessionStore(SESSION_CFG)
@@ -118,14 +205,16 @@ app = FastAPI(title="AI问答客户端执行器", version="1.0.0")
 # ---------------------------------------------------------------------------
 # 指令处理
 # ---------------------------------------------------------------------------
-def _session_id(context: Optional[dict]) -> str:
+def _session_id(context: Optional[dict], exhibition_id: Optional[str] = None) -> str:
     """会话由执行器内部自动管理，无需外部传参。
 
-    有上下文信封时按触发者 reply_to 区分用户；否则统一使用 default 会话。
+    有上下文信封时按触发者 reply_to 区分用户；否则使用 default 会话。
+    已认证展厅时再按展厅分桶，避免不同展厅共用同一会话历史。
     """
+    prefix = f"hall:{exhibition_id}:" if exhibition_id else ""
     if context and context.get("reply_to"):
-        return "user:" + str(context["reply_to"])
-    return "default"
+        return prefix + "user:" + str(context["reply_to"])
+    return prefix + "default"
 
 
 def _split_refs(raw):
@@ -217,12 +306,12 @@ def _build_user_content(question: str, file_paths: list, kb_text: str) -> str:
     return "\n\n".join(blocks)
 
 
-def handle_ai_qa(params: dict, context: Optional[dict]) -> dict:
+def handle_ai_qa(params: dict, context: Optional[dict], exhibition_id: Optional[str] = None) -> dict:
     question = params.get("问题") or params.get("question") or ""
     question = question.strip()
     if not question:
         return {"ok": False, "error": "缺少必填参数：问题"}
-    sid = _session_id(context)
+    sid = _session_id(context, exhibition_id)
     file_paths = _resolve_file_list(params)
     kb_text = load_knowledge_base()
 
@@ -251,8 +340,8 @@ def handle_ai_qa(params: dict, context: Optional[dict]) -> dict:
     }
 
 
-def handle_ai_reset(params: dict, context: Optional[dict]) -> dict:
-    sid = _session_id(context)
+def handle_ai_reset(params: dict, context: Optional[dict], exhibition_id: Optional[str] = None) -> dict:
+    sid = _session_id(context, exhibition_id)
     sessions.clear(sid)
     return {"ok": True, "message": "会话已重置", "session_id": sid}
 
@@ -263,7 +352,7 @@ HANDLERS = {
 }
 
 
-def process_commands(commands: list, context: Optional[dict]) -> list:
+def process_commands(commands: list, context: Optional[dict], exhibition_id: Optional[str] = None) -> list:
     results = []
     for cmd in commands or []:
         action = cmd.get("action", "")
@@ -274,7 +363,7 @@ def process_commands(commands: list, context: Optional[dict]) -> list:
             results.append({"action": action, "ok": False, "error": "未知指令"})
             continue
         try:
-            result = handler(params, context)
+            result = handler(params, context, exhibition_id)
         except Exception as e:
             log.error("处理指令 %s 异常: %s\n%s", action, e, traceback.format_exc())
             result = {"ok": False, "error": str(e)}
@@ -286,7 +375,7 @@ def process_commands(commands: list, context: Optional[dict]) -> list:
 # ---------------------------------------------------------------------------
 # 回程通道（把 AI 输出返回给睿思）
 # ---------------------------------------------------------------------------
-def send_callback(context: Optional[dict], body: str):
+def send_callback(context: Optional[dict], body: str, exhibition_id: Optional[str] = None):
     if not context or not body:
         return
     callback = context.get("callback")
@@ -294,20 +383,31 @@ def send_callback(context: Optional[dict], body: str):
     if not callback or not to:
         log.warning("回程所需字段缺失（callback/reply_to），跳过回程。context=%s", context)
         return
+    hall = hall_config(exhibition_id)
+    agent = str(hall.get("agent") or "").strip()
+    if not agent:
+        log.error("展厅未配置回程 Agent，已跳过回程: exhibition=%s", exhibition_id or "-")
+        return
+    if not callback_allowed(callback, hall.get("callback_allowlist") or []):
+        log.error("回程目标不在展厅允许列表内，已跳过回程: exhibition=%s callback=%s",
+                  exhibition_id or "-", callback)
+        return
     payload = {
-        "agent": context.get("agent", ""),
+        "agent": agent,
         "to": to,
         "body": body,
         "groupchat": bool(context.get("groupchat", False)),
     }
+    token = str(hall.get("callback_token") or "").strip() or CALLBACK_TOKEN
     headers = {}
-    if CALLBACK_TOKEN:
-        headers["X-Auth-Token"] = CALLBACK_TOKEN
+    if token:
+        headers["X-Auth-Token"] = token
     try:
         resp = requests.post(callback, headers=headers, json=payload, timeout=15)
-        log.info("回程投递: HTTP %s body=%s", resp.status_code, payload["body"][:100])
+        log.info("回程投递: HTTP %s exhibition=%s agent=%s body=%s",
+                 resp.status_code, exhibition_id or "-", payload["agent"], payload["body"][:100])
     except Exception as e:
-        log.error("回程投递失败: %s", e)
+        log.error("回程投递失败: exhibition=%s error=%s", exhibition_id or "-", e)
 
 
 def _pick_reply(results: list) -> str:
@@ -329,6 +429,14 @@ def health():
 @app.post("/api/commands")
 async def api_commands(request: Request):
     """RUISI-OSCA 指令入口。兼容两种载荷：纯 JSON 数组 或 信封 {context, commands}。"""
+    presented = request.headers.get(TOKEN_HEADER)
+    exhibition_id = resolve_exhibition_id(presented, TOKEN_MAP)
+    if not exhibition_id:
+        reason = "invalid_token" if (presented or "").strip() else "missing_token"
+        log.warning("[鉴权] 请求被拒绝，未处理任何指令 reason=%s client=%s",
+                    reason, request.client.host if request.client else "-")
+        return JSONResponse(status_code=401, content={"ok": False, "error": "unauthorized"})
+
     try:
         body = await request.json()
     except Exception:
@@ -338,15 +446,18 @@ async def api_commands(request: Request):
     elif isinstance(body, dict):
         commands = body.get("commands", [])
         context = body.get("context")
+        if "exhibitionId" in body:
+            log.warning("[鉴权] 忽略请求体中的 exhibitionId，使用服务端 Token 映射 body=%s mapped=%s",
+                        body.get("exhibitionId"), exhibition_id)
     else:
         return JSONResponse(status_code=400, content={"ok": False, "error": "请求体必须是 JSON 数组或信封对象"})
 
-    results = process_commands(commands, context)
+    results = process_commands(commands, context, exhibition_id)
     reply = _pick_reply(results)
 
     # 有信封且拿到结果时，通过回程通道把 AI 输出返回给睿思
     if context:
-        send_callback(context, reply)
+        send_callback(context, reply, exhibition_id)
 
     return {"ok": True, "reply": reply, "results": results}
 

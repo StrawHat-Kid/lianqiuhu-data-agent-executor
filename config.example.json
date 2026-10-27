@@ -31,5 +31,23 @@
   },
   "callback": {
     "token": "REPLACE_WITH_CALLBACK_X_AUTH_TOKEN_OR_LEAVE_EMPTY"
+  },
+  "exhibitions": {
+    "token_map": {
+      "REPLACE_WITH_EXHIBITION_A_TOKEN": "exhibition-a",
+      "REPLACE_WITH_EXHIBITION_B_TOKEN": "exhibition-b"
+    },
+    "halls": {
+      "exhibition-a": {
+        "agent": "REPLACE_WITH_EXHIBITION_A_AGENT",
+        "callback_token": "",
+        "callback_allowlist": ["https://REPLACE_WITH_ALLOWED_CALLBACK_HOST/agent/send"]
+      },
+      "exhibition-b": {
+        "agent": "REPLACE_WITH_EXHIBITION_B_AGENT",
+        "callback_token": "",
+        "callback_allowlist": ["https://REPLACE_WITH_ALLOWED_CALLBACK_HOST/agent/send"]
+      }
+    }
   }
 }

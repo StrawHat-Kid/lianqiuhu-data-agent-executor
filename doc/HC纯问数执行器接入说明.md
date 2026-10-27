@@ -34,7 +34,33 @@ lianqiuhu-data-agent-executor/
 
 首次部署时，将 `config.example.json` 复制为 `config.json`，再填写部署环境提供的 SiliconFlow API Key。不得提交真实 Key。当前模型服务商为 SiliconFlow（硅基流动），OpenAI Compatible Base URL 为 `https://api.siliconflow.cn/v1`，模型为 `deepseek-ai/DeepSeek-V4-Flash`。原 DeepSeek 官方 API 不再作为当前 HC 调用地址。默认监听为 `0.0.0.0:18034`。
 
-`callback.token` 只用于执行器向 `context.callback` 回传结果时的 `X-Auth-Token`。它不是产品侧 INGRESS_TOKEN；当前执行器代码没有实现入站 INGRESS_TOKEN 鉴权。
+`callback.token` 只用于执行器向 `context.callback` 回传结果时的 `X-Auth-Token`，是回程鉴权值，不是入站鉴权 Token。
+
+### 多展厅 Token 鉴权（必填）
+
+`POST /api/commands` 必须携带 `X-HC-Token`，服务端按 `config.json` 的 `exhibitions.token_map` 精确映射展厅：
+
+```json
+"exhibitions": {
+  "token_map": {
+    "<A展厅Token>": "exhibition-a",
+    "<B展厅Token>": "exhibition-b"
+  },
+  "halls": {
+    "exhibition-a": {"agent": "", "callback_token": ""},
+    "exhibition-b": {"agent": "", "callback_token": ""}
+  }
+}
+```
+
+- 缺失、无效或未映射的 Token 一律返回 `401 {"ok":false,"error":"unauthorized"}`，不回退到任何展厅。
+- `halls.<展厅>.agent` 为必填；缺失时执行器启动失败。回程 `agent` 只取展厅配置，不再回退 `context.agent`。
+- `halls.<展厅>.callback_token` 非空时作为该展厅回程 `X-Auth-Token`；为空时沿用全局 `callback.token`。
+- `halls.<展厅>.callback_allowlist` 必填，为允许的 callback URL 列表（按 scheme + host + port + 路径前缀匹配）；为空或缺失时执行器启动失败。不在允许范围内的回程会被拒绝并记录日志。
+- 回程地址始终取请求 `context.callback`（既有协议，不改为静态地址），执行器没有 `INGRESS_PORT` 配置项。是否放行只由该展厅的 `callback_allowlist` 决定；未提供允许列表将无法启动。
+- 示例占位值（Token 或 Agent，`REPLACE_WITH_*`、`example-*`、`change-me-*`）会被启动校验拒绝，必须替换为真实值。
+- 会话按展厅分桶（`hall:<展厅>:` 前缀），不同展厅不共用历史；`token_map` 缺失或非法时执行器启动失败。
+- `X-HC-Token` 只影响 `/api/commands`；`/api/health` 与本地联调接口保持原有行为。
 
 ## 本地启动与健康检查
 
@@ -109,6 +135,7 @@ Linux 可在安装依赖后，从项目根目录执行 `python main.py`。相对
 - transport：`http`
 - method：`POST`
 - endpoint：`http://<执行器可达地址>:18034/api/commands`
+- 请求 Header 必须携带 `X-HC-Token: <该展厅Token>`；缺失或未映射返回 401。
 - command 名称必须与 `AI智能问答`、`AI问答会话重置` 完全一致。
 - 如需回程，产品侧传入上述 context 信封。
 - 上游 SiliconFlow 可流式读取，但本执行器对产品侧返回的是普通 HTTP JSON，不提供对外 SSE。
