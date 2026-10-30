@@ -75,9 +75,11 @@ class CallbackCollector:
 class FakeDeepSeek:
     def __init__(self):
         self.calls = 0
+        self.messages = []
 
     def chat(self, messages):
         self.calls += 1
+        self.messages.append(messages)
         return f"answer-{self.calls}"
 
 
@@ -293,6 +295,33 @@ class MultiHallTest(unittest.TestCase):
         health = requests.get(f"{self.base_url}/api/health", timeout=10)
         self.assertEqual(health.status_code, 200)
         self.assertTrue(health.json()["ok"])
+        self.assertEqual(health.json()["provider"], self.executor.LLM_CFG["provider"])
+        self.assertEqual(health.json()["model"], "dh-dev")
+        self.assertNotIn("api_key", health.json())
+
+    def test_knowledge_base_is_loaded_and_injected_into_llm_messages(self):
+        kb_dir = self.executor.KB_CFG["dir"]
+        os.makedirs(kb_dir, exist_ok=True)
+        kb_path = os.path.join(kb_dir, "01_权威指标事实表.csv")
+        with open(kb_path, "w", encoding="utf-8") as handle:
+            handle.write("指标,数值\n园区楼栋数,12\n")
+        try:
+            self.assertIn("园区楼栋数,12", self.executor.load_knowledge_base())
+
+            self.fake_client.messages.clear()
+            response = self.post_commands(
+                {"context": self.context(HALL_A), "commands": [{"action": "AI智能问答", "params": {"问题": "园区有多少栋楼"}}]},
+                TOKEN_A,
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["reply"], "answer-1")
+            messages = self.fake_client.messages[-1]
+            self.assertEqual(messages[0]["role"], "system")
+            self.assertEqual(messages[0]["content"], self.executor.LLM_CFG["system_prompt"])
+            self.assertIn("园区楼栋数,12", messages[1]["content"])
+            self.assertEqual(response.json()["results"][0]["knowledge_base_chars"], len(self.executor.load_knowledge_base()))
+        finally:
+            os.remove(kb_path)
 
     def test_debug_chat_endpoint_remains_compatible(self):
         response = requests.post(f"{self.base_url}/api/chat", json={"question": "园区有多少建筑"}, timeout=15)

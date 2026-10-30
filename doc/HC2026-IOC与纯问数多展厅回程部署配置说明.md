@@ -90,7 +90,9 @@ HC_HALL_HC_A7K9P2_TO=...
 
 - 旧 `config.json` 的 `exhibitions.token_map`、`exhibitions.halls`、`exhibitions.halls.*.callback_token`、`callback_allowlist`、`callback.token` 已停用并忽略；如仍存在，启动日志会告警。
 - 请从 `config.json` 删除旧 `exhibitions` / `callback` 段，避免两套可信配置源。
-- 纯问数业务、模型调用、上下文、会话隔离与回程 Body 格式不变。
+- 模型服务已切换为与本机 OpenCode 一致的 OpenAI-compatible 服务：使用 `LLM_PROVIDER` / `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY`（或 `config.json` 的 `llm` 段）。
+- 旧 `deepseek` 段不再提供 `base_url` / `model` / `api_key`，只继承 `system_prompt` 等业务字段；`LLM_API_KEY` 使用部署环境独立签发的 Key，不复用 OpenCode 登录凭据或内部认证文件。
+- 纯问数业务、Prompt、知识库检索、上下文、会话隔离与回程 Body 格式不变。
 
 ## 六、两个执行器需要的实际参数
 

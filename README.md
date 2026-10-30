@@ -1,6 +1,6 @@
 # 练秋湖 HC2026 纯问数执行器
 
-FastAPI + Uvicorn 的单轮问数执行器：接收 RUISI-OSCA 的 `POST /api/commands`，通过 SiliconFlow（OpenAI Compatible）生成回答，并按展厅隔离的 RUISI Ingress 回程。
+FastAPI + Uvicorn 的单轮问数执行器：接收 RUISI-OSCA 的 `POST /api/commands`，通过 OpenAI-compatible 模型服务生成回答（默认与本机 OpenCode 使用同一服务商、模型与接口），并按展厅隔离的 RUISI Ingress 回程。
 
 - 入站鉴权：`X-HC-Token` → `exhibitionId`
 - 展厅回程：按展厅环境变量提供的 Agent、Ingress Host、Ingress Port、Ingress Token、接收方
@@ -18,7 +18,8 @@ lianqiuhu-data-agent-executor/
   .env.example              # 多展厅配置示例（可提交）
   .env                      # 真实展厅配置，已被 Git 忽略
   main.py
-  deepseek_client.py
+  llm_config.py             # 模型服务配置解析（默认值 / llm 段 / LLM_* 环境变量）
+  llm_client.py             # OpenAI-compatible 对话客户端（通用，不绑定厂商）
   exhibition_auth.py
   file_store.py
   sessions.py
@@ -58,14 +59,38 @@ python main.py
 ```json
 {
   "server": {"host": "0.0.0.0", "port": 18034},
-  "deepseek": {"base_url": "https://api.siliconflow.cn/v1", "api_key": "YOUR_API_KEY", "model": "deepseek-ai/DeepSeek-V4-Flash"},
+  "llm": {
+    "provider": "ruisi",
+    "base_url": "https://llm.rsagent.net/v1",
+    "api_key": "",
+    "model": "dh-dev",
+    "thinking_mode": "none",
+    "timeout_seconds": 60
+  },
   "knowledge_base": {"dir": "knowedge"},
   "upload": {"dir": "data/uploads"},
   "sessions": {"max_history": 20}
 }
 ```
 
-`config.json` 已被 Git 忽略，真实 API Key 不得提交。
+`config.json` 已被 Git 忽略，真实 API Key 不得提交。推荐把密钥写入部署环境变量 `LLM_API_KEY`，`config.json` 中的 `llm.api_key` 留空。
+
+### 模型服务环境变量
+
+| 变量 | 说明 |
+| --- | --- |
+| `LLM_PROVIDER` | 服务商标识，默认 `ruisi`（仅用于日志/健康检查） |
+| `LLM_BASE_URL` | OpenAI-compatible API 根地址，默认 `https://llm.rsagent.net/v1` |
+| `LLM_MODEL` | 模型名，默认 `dh-dev` |
+| `LLM_API_KEY` | 部署时填写的独立 API Key，缺失时问答返回明确配置错误，不会回退旧 DeepSeek 配置 |
+| `LLM_TIMEOUT_SECONDS` | 单次请求超时，默认 `60` |
+| `LLM_MAX_TOKENS` | 单次回答上限，默认 `8192` |
+| `LLM_STREAM` | 是否使用 SSE 流式，默认 `true` |
+| `LLM_THINKING_MODE` | `none`（默认，OpenAI-compatible 通用）或 `deepseek`（额外发送 `thinking`/`reasoning_effort`） |
+
+优先级：`LLM_*` 环境变量 > `config.json` 的 `llm` 段 > 内置默认值。
+
+旧 `config.json` 的 `deepseek` 段不再提供连接参数（`base_url` / `model` / `api_key` 一律忽略），只继承 `system_prompt`、`max_tokens`、`stream` 等业务字段，并在启动日志告警；请迁移到 `llm` 段，避免继续指向 DeepSeek / SiliconFlow。
 
 ### 多展厅环境变量（必填）
 
@@ -184,7 +209,7 @@ X-Auth-Token: <INGRESS_TOKEN>
 python -m unittest discover -s test -p "test_*.py" -v
 ```
 
-当前共 18 项，使用 mock RUISI callback 与 Fake DeepSeek，不调用真实模型和真实展厅。多展厅用例见 `test/test_multi_hall.py`。
+使用 mock RUISI callback 与 Fake LLM client，不调用真实模型和真实展厅。多展厅用例见 `test/test_multi_hall.py`，模型服务配置与 OpenAI-compatible 请求/流式解析用例见 `test/test_llm_provider.py`。
 
 ## 数据规模限制
 

@@ -1,8 +1,8 @@
 """AI问答客户端执行器（HTTP 类型睿司执行器）。
 
 接收 RUISI-OSCA 分发过来的指令（HTTP JSON 数组或带 context 的信封），
-与 DeepSeek 官方 API 进行聊天交互，支持上传数据文件作为上下文，
-并把 AI 输出通过回程通道（callback）返回给睿思。
+与 OpenAI-compatible 大模型服务（默认与本机 OpenCode 使用同一服务商/模型）进行聊天交互，
+支持上传数据文件作为上下文，并把 AI 输出通过回程通道（callback）返回给睿思。
 
 常用端口：8009
 """
@@ -22,7 +22,8 @@ from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from deepseek_client import DeepSeekClient, DeepSeekError
+from llm_client import LlmClient, LlmConfigError, LlmError
+from llm_config import DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_PROVIDER, resolve_llm_config
 from exhibition_auth import PLACEHOLDER_VALUE_PATTERN, TOKEN_HEADER, parse_token_map, resolve_exhibition_id
 from file_store import FileStore
 from sessions import SessionStore
@@ -63,15 +64,15 @@ log = logging.getLogger("main")
 CONFIG_PATH = os.environ.get("EXECUTOR_CONFIG", "config.json")
 DEFAULT_CONFIG = {
     "server": {"host": "0.0.0.0", "port": 8009},
-    "deepseek": {
-        "base_url": "https://api.deepseek.com",
+    "llm": {
+        "provider": DEFAULT_PROVIDER,
+        "base_url": DEFAULT_BASE_URL,
         "api_key": "",
-        "model": "deepseek-v4-flash",
-        "thinking": "enabled",
-        "reasoning_effort": "medium",
+        "model": DEFAULT_MODEL,
+        "thinking_mode": "none",
         "max_tokens": 8192,
         "stream": True,
-        "timeout_seconds": 300,
+        "timeout_seconds": 60,
         "max_retries": 2,
         "retry_delay_seconds": 2,
         "system_prompt": "你是一个严谨的数据智能分析助手。用户每次提问时，都会在问题末尾附上知识库全部文件内容。请务必以知识库内容为依据作答，认真阅读并精确计算，不要编造数据；如果知识库中没有相关信息，请如实说明。回答时直接给出结论和计算过程摘要，使用中文作答。",
@@ -104,7 +105,9 @@ def _deep_merge(base, override):
 
 CONFIG = load_config()
 
-DEEPSEEK_CFG = CONFIG["deepseek"]
+# 模型服务连接参数只来自 llm 段与 LLM_* 环境变量；旧 deepseek 段仅保留 system_prompt 等业务字段。
+LLM_CFG = resolve_llm_config(CONFIG, os.environ)
+LABEL = LLM_CFG.get("provider") or "LLM"
 KB_CFG = CONFIG["knowledge_base"]
 UPLOAD_CFG = CONFIG["upload"]
 SESSION_CFG = CONFIG["sessions"]
@@ -276,7 +279,15 @@ def callback_matches_hall(callback, hall: dict) -> bool:
         return False
     return target.path == RUISI_SEND_PATH
 
-client = DeepSeekClient(DEEPSEEK_CFG)
+client = LlmClient(LLM_CFG)
+if LLM_CFG.get("legacy_section_ignored"):
+    log.warning(
+        "config.json 中的旧 deepseek 段不再用于模型连接，已切换为 %s/%s（%s）；"
+        "仅继承 system_prompt 等业务字段，请迁移到 llm 段。",
+        LLM_CFG["provider"], LLM_CFG["model"], LLM_CFG["base_url"],
+    )
+log.info("模型服务配置: provider=%s model=%s base_url=%s api_key=%s",
+         LLM_CFG["provider"], LLM_CFG["model"], LLM_CFG["base_url"], LLM_CFG["api_key_source"])
 file_store = FileStore(UPLOAD_CFG)
 sessions = SessionStore(SESSION_CFG)
 
@@ -402,7 +413,7 @@ def handle_ai_qa(params: dict, context: Optional[dict], exhibition_id: Optional[
 
     # 单轮会话：每次提问都是独立请求，只发送 系统提示词 + 本次问题（尾部拼接知识库）
     messages = [
-        {"role": "system", "content": DEEPSEEK_CFG.get("system_prompt", "")},
+        {"role": "system", "content": LLM_CFG.get("system_prompt", "")},
         {"role": "user", "content": _build_user_content(question, file_paths, kb_text)},
     ]
 
@@ -410,8 +421,15 @@ def handle_ai_qa(params: dict, context: Optional[dict], exhibition_id: Optional[
              sid, question, len(kb_text), len(file_paths))
     try:
         answer = client.chat(messages)
+    except LlmConfigError as e:
+        # 配置类错误直接返回，避免用错误密钥反复重试。
+        log.error("[%s] %s 配置错误: %s", sid, LABEL, e)
+        return {"ok": False, "error": str(e), "question": question}
+    except LlmError as e:
+        log.error("[%s] %s 调用失败: %s", sid, LABEL, e)
+        return {"ok": False, "error": str(e), "question": question}
     except Exception as e:
-        log.error("[%s] DeepSeek 调用失败: %s", sid, e)
+        log.error("[%s] %s 调用异常: %s", sid, LABEL, e)
         return {"ok": False, "error": str(e), "question": question}
 
     log.info("[%s] 回答长度: %d 字符", sid, len(answer))
@@ -514,7 +532,15 @@ def _pick_reply(results: list) -> str:
 # ---------------------------------------------------------------------------
 @app.get("/api/health")
 def health():
-    return {"ok": True, "name": "AI问答客户端执行器", "model": DEEPSEEK_CFG.get("model")}
+    return {
+        "ok": True,
+        "name": "AI问答客户端执行器",
+        # 保留 model 字段兼容既有探活脚本，并补充服务商标识（不含密钥）。
+        "model": LLM_CFG.get("model"),
+        "provider": LLM_CFG.get("provider"),
+        "base_url": LLM_CFG.get("base_url"),
+        "llmConfigured": bool(LLM_CFG.get("api_key")),
+    }
 
 
 @app.post("/api/commands")
@@ -630,5 +656,6 @@ if __name__ == "__main__":
 
     host = SERVER_CFG.get("host", "0.0.0.0")
     port = int(SERVER_CFG.get("port", 8009))
-    log.info("AI问答客户端执行器启动中: http://%s:%s (model=%s)", host, port, DEEPSEEK_CFG.get("model"))
+    log.info("AI问答客户端执行器启动中: http://%s:%s (provider=%s model=%s)",
+             host, port, LLM_CFG.get("provider"), LLM_CFG.get("model"))
     uvicorn.run(app, host=host, port=port, log_level="info")
