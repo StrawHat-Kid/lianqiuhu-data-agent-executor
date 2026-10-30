@@ -9,6 +9,7 @@
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import traceback
@@ -16,6 +17,7 @@ from typing import List, Optional
 from urllib.parse import urlsplit
 
 import requests
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -24,6 +26,10 @@ from deepseek_client import DeepSeekClient, DeepSeekError
 from exhibition_auth import PLACEHOLDER_VALUE_PATTERN, TOKEN_HEADER, parse_token_map, resolve_exhibition_id
 from file_store import FileStore
 from sessions import SessionStore
+
+# 与四个专题执行器一致：展厅配置全部来自环境变量（可写在项目根目录 .env）。
+# 已存在的进程环境变量优先，不会被 .env 覆盖。
+load_dotenv(override=False)
 
 # ---------------------------------------------------------------------------
 # 日志（显式 UTF-8，避免中文日志乱码）
@@ -73,8 +79,6 @@ DEFAULT_CONFIG = {
     "knowledge_base": {"dir": "knowedge", "max_file_chars": 500000, "max_total_chars": 1200000},
     "upload": {"dir": "data/uploads", "max_file_size_mb": 64, "max_file_chars": 500000},
     "sessions": {"max_history": 20},
-    "callback": {"token": ""},
-    "exhibitions": {"token_map": {}, "halls": {}},
 }
 
 
@@ -105,58 +109,139 @@ KB_CFG = CONFIG["knowledge_base"]
 UPLOAD_CFG = CONFIG["upload"]
 SESSION_CFG = CONFIG["sessions"]
 SERVER_CFG = CONFIG["server"]
-CALLBACK_TOKEN = (CONFIG.get("callback") or {}).get("token", "")
 
-EXHIBITIONS_CFG = CONFIG.get("exhibitions") or {}
-TOKEN_MAP = parse_token_map(EXHIBITIONS_CFG.get("token_map"))
-
-
-def parse_callback_allowlist(raw, hall_id: str) -> list:
-    if raw is None or (isinstance(raw, list) and len(raw) == 0):
-        raise ValueError(f"exhibitions.halls.{hall_id}.callback_allowlist is required")
-    if not isinstance(raw, list):
-        raise ValueError(f"exhibitions.halls.{hall_id}.callback_allowlist must be a list")
-    allowlist = []
-    for entry in raw:
-        if not isinstance(entry, str) or not entry.strip():
-            raise ValueError(f"exhibitions.halls.{hall_id}.callback_allowlist contains an invalid entry")
-        value = entry.strip()
-        parsed = urlsplit(value)
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            raise ValueError(f"exhibitions.halls.{hall_id}.callback_allowlist entry must be an http(s) URL")
-        if PLACEHOLDER_VALUE_PATTERN.match(parsed.hostname or ""):
-            raise ValueError(f"exhibitions.halls.{hall_id}.callback_allowlist contains a placeholder host")
-        allowlist.append(value)
-    return allowlist
+HALL_ENV_PREFIX = "HC_HALL_"
+RUISI_SEND_PATH = "/agent/send"
 
 
-def parse_halls(raw) -> dict:
-    if raw is None:
-        raw = {}
-    if not isinstance(raw, dict):
-        raise ValueError("exhibitions.halls must be an object")
+def _read_env(env, name: str) -> str:
+    value = env.get(name)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _hall_env_prefix(exhibition_id: str) -> str:
+    return HALL_ENV_PREFIX + re.sub(r"[^A-Z0-9]", "_", exhibition_id.upper())
+
+
+def _require_non_placeholder(value: str, name: str) -> str:
+    if not value:
+        raise ValueError(f"missing required environment variable: {name}")
+    if PLACEHOLDER_VALUE_PATTERN.match(value):
+        raise ValueError(f"{name} contains a placeholder value; replace it with a real value")
+    return value
+
+
+def _assert_no_hall_conflicts(halls: dict) -> None:
+    prefixes = {}
+    for hall_id in halls:
+        prefix = _hall_env_prefix(hall_id)
+        if prefix in prefixes:
+            raise ValueError(
+                "HC_TOKEN_MAP contains exhibition ids that share the same environment prefix "
+                f"{prefix}: {prefixes[prefix]} and {hall_id}"
+            )
+        prefixes[prefix] = hall_id
+
+    agents = {}
+    targets = {}
+    for hall_id, cfg in halls.items():
+        agent = cfg["agent"]
+        if agent in agents:
+            raise ValueError(
+                f"HC hall config conflict: AGENT is shared by {agents[agent]} and {hall_id}"
+            )
+        agents[agent] = hall_id
+
+        target = f"{cfg['ingress_host']}:{cfg['ingress_port']}"
+        if target in targets:
+            raise ValueError(
+                f"HC hall config conflict: ingress target {target} is shared by {targets[target]} and {hall_id}"
+            )
+        targets[target] = hall_id
+
+
+def read_token_map(env=None):
+    env = os.environ if env is None else env
+    raw = _read_env(env, "HC_TOKEN_MAP")
+    if not raw:
+        raise ValueError(
+            "HC_TOKEN_MAP is required; config.json exhibitions are no longer read"
+        )
+    return parse_token_map(raw, label="HC_TOKEN_MAP")
+
+
+def parse_halls(env=None, token_map=None) -> dict:
+    """按 HC_TOKEN_MAP 中的展厅动态读取 HC_HALL_<展厅>_* 配置。
+
+    多展厅模式下每个展厅必须独立提供 AGENT / INGRESS_HOST / INGRESS_PORT /
+    INGRESS_TOKEN，缺任何一项都启动失败，不会回退到其他展厅。仅当 HC_TOKEN_MAP
+    只映射一个展厅时，才允许用旧版 AGENT / INGRESS_HOST / INGRESS_PORT /
+    INGRESS_TOKEN 作为兼容回退。
+    """
+    env = os.environ if env is None else env
+    token_map = TOKEN_MAP if token_map is None else token_map
+    hall_ids = sorted(set(token_map.values()))
+    allow_legacy_fallback = len(hall_ids) == 1
+
     halls = {}
-    for hall_id, cfg in raw.items():
-        hall_id = str(hall_id)
-        if not isinstance(cfg, dict):
-            raise ValueError(f"exhibitions.halls.{hall_id} must be an object")
-        agent = str(cfg.get("agent") or "").strip()
-        if not agent:
-            raise ValueError(f"exhibitions.halls.{hall_id}.agent is required")
-        if PLACEHOLDER_VALUE_PATTERN.match(agent):
-            raise ValueError(f"exhibitions.halls.{hall_id}.agent contains a placeholder value")
+    for hall_id in hall_ids:
+        prefix = _hall_env_prefix(hall_id)
+
+        def resolve(suffix: str, legacy_name: Optional[str] = None) -> str:
+            scoped = _read_env(env, f"{prefix}_{suffix}")
+            if scoped:
+                return scoped
+            if allow_legacy_fallback and legacy_name:
+                return _read_env(env, legacy_name)
+            return ""
+
+        agent = _require_non_placeholder(resolve("AGENT", "AGENT"), f"{prefix}_AGENT")
+        ingress_host = _require_non_placeholder(
+            resolve("INGRESS_HOST", "INGRESS_HOST"), f"{prefix}_INGRESS_HOST"
+        )
+        if any(char in ingress_host for char in (" ", "\t", "\r", "\n", "/", ":")):
+            raise ValueError(
+                f"{prefix}_INGRESS_HOST must be a hostname or IP address without protocol or path"
+            )
+        raw_port = _require_non_placeholder(
+            resolve("INGRESS_PORT", "INGRESS_PORT"), f"{prefix}_INGRESS_PORT"
+        )
+        try:
+            ingress_port = int(raw_port)
+        except ValueError as exc:
+            raise ValueError(f"{prefix}_INGRESS_PORT must be a valid TCP port") from exc
+        if ingress_port < 1 or ingress_port > 65535:
+            raise ValueError(f"{prefix}_INGRESS_PORT must be a valid TCP port")
+        ingress_token = _require_non_placeholder(
+            resolve("INGRESS_TOKEN", "INGRESS_TOKEN"), f"{prefix}_INGRESS_TOKEN"
+        )
+        to = resolve("TO", None) or None
+
         halls[hall_id] = {
+            "exhibition_id": hall_id,
             "agent": agent,
-            "callback_token": str(cfg.get("callback_token") or "").strip(),
-            "callback_allowlist": parse_callback_allowlist(cfg.get("callback_allowlist"), hall_id),
+            "ingress_host": ingress_host,
+            "ingress_port": ingress_port,
+            "ingress_token": ingress_token,
+            "to": to,
+            "ingress_url": f"http://{ingress_host}:{ingress_port}{RUISI_SEND_PATH}",
         }
-    missing = sorted(set(TOKEN_MAP.values()) - set(halls))
-    if missing:
-        raise ValueError("exhibitions.halls is missing configuration for: " + ", ".join(missing))
+
+    _assert_no_hall_conflicts(halls)
     return halls
 
 
-HALLS = parse_halls(EXHIBITIONS_CFG.get("halls"))
+TOKEN_MAP = read_token_map(os.environ)
+HALLS = parse_halls(os.environ, TOKEN_MAP)
+
+_LEGACY_EXHIBITIONS = CONFIG.get("exhibitions")
+_LEGACY_CALLBACK_TOKEN = (CONFIG.get("callback") or {}).get("token")
+if _LEGACY_EXHIBITIONS or _LEGACY_CALLBACK_TOKEN:
+    log.warning(
+        "config.json 中的 exhibitions/callback.token 已停用并忽略；展厅配置只读取 "
+        "HC_TOKEN_MAP 与 HC_HALL_<展厅>_* 环境变量，请从 config.json 中移除旧配置。"
+    )
+log.info("多展厅配置已加载: exhibitions=%s", ", ".join(sorted(HALLS)))
 
 
 def hall_config(exhibition_id: Optional[str]) -> dict:
@@ -166,30 +251,30 @@ def hall_config(exhibition_id: Optional[str]) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _origin(url) -> tuple:
-    port = url.port or (443 if url.scheme == "https" else 80)
-    return (url.scheme, (url.hostname or "").lower(), port)
+def _effective_port(url) -> int:
+    return url.port or (443 if url.scheme == "https" else 80)
 
 
-def callback_allowed(callback: str, allowlist: list) -> bool:
-    if not isinstance(allowlist, list) or not allowlist:
+def callback_matches_hall(callback, hall: dict) -> bool:
+    """回程地址必须与展厅可信 Ingress 配置完全一致：http + host + port + /agent/send。"""
+    if not isinstance(callback, str) or not callback.strip():
+        return False
+    if not isinstance(hall, dict) or not hall:
         return False
     try:
         target = urlsplit(callback)
     except ValueError:
         return False
-    if target.scheme not in ("http", "https"):
+    if target.scheme != "http":
         return False
-    for entry in allowlist:
-        allowed = urlsplit(entry)
-        if _origin(target) != _origin(allowed):
-            continue
-        base_path = allowed.path or "/"
-        if target.path == allowed.path or target.path.startswith(
-            base_path if base_path.endswith("/") else base_path + "/"
-        ):
-            return True
-    return False
+    if (target.hostname or "").lower() != str(hall.get("ingress_host") or "").lower():
+        return False
+    try:
+        if _effective_port(target) != int(hall.get("ingress_port")):
+            return False
+    except (TypeError, ValueError):
+        return False
+    return target.path == RUISI_SEND_PATH
 
 client = DeepSeekClient(DEEPSEEK_CFG)
 file_store = FileStore(UPLOAD_CFG)
@@ -378,32 +463,38 @@ def process_commands(commands: list, context: Optional[dict], exhibition_id: Opt
 def send_callback(context: Optional[dict], body: str, exhibition_id: Optional[str] = None):
     if not context or not body:
         return
-    callback = context.get("callback")
-    to = context.get("reply_to")
-    if not callback or not to:
-        log.warning("回程所需字段缺失（callback/reply_to），跳过回程。context=%s", context)
-        return
     hall = hall_config(exhibition_id)
-    agent = str(hall.get("agent") or "").strip()
-    if not agent:
-        log.error("展厅未配置回程 Agent，已跳过回程: exhibition=%s", exhibition_id or "-")
+    if not hall:
+        log.error("展厅未配置可信回程信息，跳过本次回程: exhibition=%s", exhibition_id or "-")
         return
-    if not callback_allowed(callback, hall.get("callback_allowlist") or []):
-        log.error("回程目标不在展厅允许列表内，已跳过回程: exhibition=%s callback=%s",
-                  exhibition_id or "-", callback)
+
+    callback = context.get("callback")
+    if not callback:
+        log.warning("回程上下文缺少 callback，跳过本次回程。context=%s", context)
         return
+    if not callback_matches_hall(callback, hall):
+        log.error(
+            "回程目标与展厅 Ingress 配置不一致，跳过本次回程: exhibition=%s callback=%s trusted=%s",
+            exhibition_id or "-", callback, hall["ingress_url"],
+        )
+        return
+
+    to = context.get("reply_to") or hall.get("to")
+    if not to:
+        log.warning("回程接收方缺失（reply_to 且展厅未配置 TO），跳过本次回程: exhibition=%s",
+                    exhibition_id or "-")
+        return
+
     payload = {
-        "agent": agent,
+        # Agent 只取 Token 映射到的展厅配置，请求上下文中的 agent 不可覆盖。
+        "agent": hall["agent"],
         "to": to,
         "body": body,
         "groupchat": bool(context.get("groupchat", False)),
     }
-    token = str(hall.get("callback_token") or "").strip() or CALLBACK_TOKEN
-    headers = {}
-    if token:
-        headers["X-Auth-Token"] = token
+    headers = {"X-Auth-Token": hall["ingress_token"]}
     try:
-        resp = requests.post(callback, headers=headers, json=payload, timeout=15)
+        resp = requests.post(hall["ingress_url"], headers=headers, json=payload, timeout=15)
         log.info("回程投递: HTTP %s exhibition=%s agent=%s body=%s",
                  resp.status_code, exhibition_id or "-", payload["agent"], payload["body"][:100])
     except Exception as e:

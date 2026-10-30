@@ -1,0 +1,461 @@
+{
+  "info": {
+    "name": "HC2026 Data Agent Multi-Hall",
+    "description": "纯问数执行器多展厅鉴权、按展厅回程配置与隔离验证。真实 Token 只填写在本地环境，禁止提交。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "01 健康检查（匿名）",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "health"
+          ]
+        },
+        "description": "无需 Token。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.eql(true));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 A 展厅会话重置（验证回程 Agent/Host/Port/Token）",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-HC-Token",
+            "value": "{{tokenA}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"context\": {\n    \"agent\": \"context-agent\",\n    \"reply_to\": \"user@example.com\",\n    \"groupchat\": false,\n    \"callback\": \"{{dataCallbackA}}\"\n  },\n  \"commands\": [\n    {\n      \"action\": \"AI问答会话重置\",\n      \"params\": {}\n    }\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/commands",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "commands"
+          ]
+        },
+        "description": "A Token 必须映射到 HC-A7K9P2，回程使用 A 展厅 AGENT、INGRESS_HOST、INGRESS_PORT、INGRESS_TOKEN。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.eql(true));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 B 展厅会话重置（验证与 A 隔离）",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-HC-Token",
+            "value": "{{tokenB}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"context\": {\n    \"agent\": \"context-agent\",\n    \"reply_to\": \"user@example.com\",\n    \"groupchat\": false,\n    \"callback\": \"{{dataCallbackB}}\"\n  },\n  \"commands\": [\n    {\n      \"action\": \"AI问答会话重置\",\n      \"params\": {}\n    }\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/commands",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "commands"
+          ]
+        },
+        "description": "B Token 必须映射到 HC-B4M8Q1，回程使用 B 展厅配置，不混用 A。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.eql(true));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 C 展厅会话重置",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-HC-Token",
+            "value": "{{tokenC}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"context\": {\n    \"agent\": \"context-agent\",\n    \"reply_to\": \"user@example.com\",\n    \"groupchat\": false,\n    \"callback\": \"{{dataCallbackC}}\"\n  },\n  \"commands\": [\n    {\n      \"action\": \"AI问答会话重置\",\n      \"params\": {}\n    }\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/commands",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "commands"
+          ]
+        },
+        "description": "C Token 必须映射到 HC-C6N3R5，回程使用 C 展厅配置。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.eql(true));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 A 展厅 AI 智能问答",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-HC-Token",
+            "value": "{{tokenA}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"context\": {\n    \"agent\": \"context-agent\",\n    \"reply_to\": \"user@example.com\",\n    \"groupchat\": false,\n    \"callback\": \"{{dataCallbackA}}\"\n  },\n  \"commands\": [\n    {\n      \"action\": \"AI智能问答\",\n      \"params\": {\n        \"问题\": \"园区有多少建筑\"\n      }\n    }\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/commands",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "commands"
+          ]
+        },
+        "description": "验证原有纯问数业务与回程正文格式不变。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.eql(true));",
+              "pm.test('reply present', () => pm.expect(pm.response.json().reply).to.be.a('string').and.not.empty);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 缺少 Token（预期 401）",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"context\": {\n    \"agent\": \"context-agent\",\n    \"reply_to\": \"user@example.com\",\n    \"groupchat\": false,\n    \"callback\": \"{{dataCallbackA}}\"\n  },\n  \"commands\": [\n    {\n      \"action\": \"AI问答会话重置\",\n      \"params\": {}\n    }\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/commands",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "commands"
+          ]
+        },
+        "description": "未携带 X-HC-Token，必须 401，且不回调。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 401', () => pm.response.to.have.status(401));",
+              "pm.test('unauthorized', () => pm.expect(pm.response.json()).to.eql({ ok: false, error: 'unauthorized' }));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 未知 Token（预期 401）",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-HC-Token",
+            "value": "{{tokenUnknown}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"context\": {\n    \"agent\": \"context-agent\",\n    \"reply_to\": \"user@example.com\",\n    \"groupchat\": false,\n    \"callback\": \"{{dataCallbackA}}\"\n  },\n  \"commands\": [\n    {\n      \"action\": \"AI问答会话重置\",\n      \"params\": {}\n    }\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/commands",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "commands"
+          ]
+        },
+        "description": "未映射 Token 必须 401，不回退到任何展厅。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 401', () => pm.response.to.have.status(401));",
+              "pm.test('unauthorized', () => pm.expect(pm.response.json()).to.eql({ ok: false, error: 'unauthorized' }));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 Body 伪造展厅 + context 伪造 Agent（仍使用 B）",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-HC-Token",
+            "value": "{{tokenB}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"exhibitionId\": \"{{exhibitionIdA}}\",\n  \"context\": {\n    \"exhibitionId\": \"{{exhibitionIdA}}\",\n    \"agent\": \"spoofed-agent\",\n    \"reply_to\": \"user@example.com\",\n    \"groupchat\": false,\n    \"callback\": \"{{dataCallbackB}}\"\n  },\n  \"commands\": [\n    {\n      \"action\": \"AI问答会话重置\",\n      \"params\": {}\n    }\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/commands",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "commands"
+          ]
+        },
+        "description": "预期 200，实际回程仍使用 B 展厅 Agent 与 Token；Body/context 不能覆盖鉴权结果。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "09 A Token + B callback（拒绝回程，不回投 B）",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-HC-Token",
+            "value": "{{tokenA}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"context\": {\n    \"agent\": \"context-agent\",\n    \"reply_to\": \"user@example.com\",\n    \"groupchat\": false,\n    \"callback\": \"{{dataCallbackB}}\"\n  },\n  \"commands\": [\n    {\n      \"action\": \"AI问答会话重置\",\n      \"params\": {}\n    }\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/commands",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "commands"
+          ]
+        },
+        "description": "预期 HTTP 200（业务已执行），但 callback 与 A 展厅 Ingress 不一致，执行器拒绝回程；B 不回收到消息。需结合 mock 回程服务日志验证。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 直接问答（本地联调）",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"question\": \"园区有多少建筑\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/chat",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "chat"
+          ]
+        },
+        "description": "本地联调接口，不带展厅鉴权，不触发回程。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

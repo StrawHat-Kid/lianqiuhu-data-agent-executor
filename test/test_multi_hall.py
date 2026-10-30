@@ -1,4 +1,4 @@
-"""多展厅 Token 隔离测试（仅本地 Mock，不访问生产 RUISI / DeepSeek）。
+"""多展厅 Token 鉴权与按展厅回程配置测试（全部使用 Mock RUISI / DeepSeek）。
 
 运行：
     python -m unittest discover -s test -p "test_*.py" -v
@@ -20,15 +20,25 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TOKEN_A = "test-token-a-0123456789abcdef"
 TOKEN_B = "test-token-b-0123456789abcdef"
 TOKEN_C = "test-token-c-0123456789abcdef"
-HALL_A = "exhibition-a"
-HALL_B = "exhibition-b"
-HALL_C = "exhibition-c"
+HALL_A = "HC-A7K9P2"
+HALL_B = "HC-B4M8Q1"
+HALL_C = "HC-C6N3R5"
 AGENT_A = "test-agent-a"
 AGENT_B = "test-agent-b"
 AGENT_C = "test-agent-c"
-CALLBACK_TOKEN_A = "callback-token-a"
-CALLBACK_TOKEN_B = "callback-token-b"
-CALLBACK_TOKEN_C = "callback-token-c"
+INGRESS_TOKEN_A = "ingress-token-a"
+INGRESS_TOKEN_B = "ingress-token-b"
+INGRESS_TOKEN_C = "ingress-token-c"
+HALL_ENV_NAMES = {
+    "HC_TOKEN_MAP",
+    "AGENT",
+    "INGRESS_HOST",
+    "INGRESS_PORT",
+    "INGRESS_TOKEN",
+}
+for hall in (HALL_A, HALL_B, HALL_C):
+    prefix = "HC_HALL_" + "".join(ch if ch.isalnum() else "_" for ch in hall.upper())
+    HALL_ENV_NAMES.update({f"{prefix}_{suffix}" for suffix in ("AGENT", "INGRESS_HOST", "INGRESS_PORT", "INGRESS_TOKEN", "TO")})
 
 
 class CallbackCollector:
@@ -40,7 +50,9 @@ class CallbackCollector:
             def do_POST(self):
                 length = int(self.headers.get("Content-Length") or 0)
                 payload = json.loads(self.rfile.read(length) or b"{}")
-                collector.requests.append({"payload": payload, "headers": dict(self.headers)})
+                collector.requests.append(
+                    {"path": self.path, "payload": payload, "headers": dict(self.headers)}
+                )
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b'{"status":"ok"}')
@@ -49,7 +61,9 @@ class CallbackCollector:
                 pass
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/agent/send"
+        self.host = "127.0.0.1"
+        self.port = self.server.server_address[1]
+        self.url = f"http://127.0.0.1:{self.port}/agent/send"
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
@@ -64,7 +78,7 @@ class FakeDeepSeek:
 
     def chat(self, messages):
         self.calls += 1
-        return f"答复-{self.calls}"
+        return f"answer-{self.calls}"
 
 
 def free_port():
@@ -73,38 +87,50 @@ def free_port():
         return sock.getsockname()[1]
 
 
+def hall_env(collectors, overrides=None):
+    env = {
+        "HC_TOKEN_MAP": f"{TOKEN_A}:{HALL_A},{TOKEN_B}:{HALL_B},{TOKEN_C}:{HALL_C}",
+        f"HC_HALL_HC_A7K9P2_AGENT": AGENT_A,
+        f"HC_HALL_HC_A7K9P2_INGRESS_HOST": collectors[HALL_A].host,
+        f"HC_HALL_HC_A7K9P2_INGRESS_PORT": str(collectors[HALL_A].port),
+        f"HC_HALL_HC_A7K9P2_INGRESS_TOKEN": INGRESS_TOKEN_A,
+        f"HC_HALL_HC_B4M8Q1_AGENT": AGENT_B,
+        f"HC_HALL_HC_B4M8Q1_INGRESS_HOST": collectors[HALL_B].host,
+        f"HC_HALL_HC_B4M8Q1_INGRESS_PORT": str(collectors[HALL_B].port),
+        f"HC_HALL_HC_B4M8Q1_INGRESS_TOKEN": INGRESS_TOKEN_B,
+        f"HC_HALL_HC_C6N3R5_AGENT": AGENT_C,
+        f"HC_HALL_HC_C6N3R5_INGRESS_HOST": collectors[HALL_C].host,
+        f"HC_HALL_HC_C6N3R5_INGRESS_PORT": str(collectors[HALL_C].port),
+        f"HC_HALL_HC_C6N3R5_INGRESS_TOKEN": INGRESS_TOKEN_C,
+    }
+    if overrides:
+        env.update(overrides)
+    return env
+
+
 class MultiHallTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp_dir = tempfile.mkdtemp(prefix="hc-data-agent-test-")
-        cls.callback = CallbackCollector()
+        cls.callbacks = {hall: CallbackCollector() for hall in (HALL_A, HALL_B, HALL_C)}
         config = {
             "server": {"host": "127.0.0.1", "port": free_port()},
             "deepseek": {"api_key": "test-key", "stream": False},
-            "knowledge_base": {"dir": os.path.join(cls.temp_dir, "knowledge"), "max_file_chars": 1000, "max_total_chars": 1000},
-            "upload": {"dir": os.path.join(cls.temp_dir, "uploads")},
-            "callback": {"token": "global-callback-token"},
-            "exhibitions": {
-                "token_map": {TOKEN_A: HALL_A, TOKEN_B: HALL_B},
-                "halls": {
-                    HALL_A: {
-                        "agent": AGENT_A,
-                        "callback_token": CALLBACK_TOKEN_A,
-                        "callback_allowlist": [cls.callback.url],
-                    },
-                    HALL_B: {
-                        "agent": AGENT_B,
-                        "callback_token": CALLBACK_TOKEN_B,
-                        "callback_allowlist": [cls.callback.url],
-                    },
-                },
+            "knowledge_base": {
+                "dir": os.path.join(cls.temp_dir, "knowledge"),
+                "max_file_chars": 1000,
+                "max_total_chars": 1000,
             },
+            "upload": {"dir": os.path.join(cls.temp_dir, "uploads")},
         }
         config_path = os.path.join(cls.temp_dir, "config.json")
         with open(config_path, "w", encoding="utf-8") as handle:
             json.dump(config, handle)
 
+        for name in HALL_ENV_NAMES:
+            os.environ.pop(name, None)
         os.environ["EXECUTOR_CONFIG"] = config_path
+        os.environ.update(hall_env(cls.callbacks))
         os.chdir(cls.temp_dir)
         sys.path.insert(0, PROJECT_DIR)
 
@@ -116,7 +142,14 @@ class MultiHallTest(unittest.TestCase):
 
         import uvicorn
 
-        cls.uvicorn_server = uvicorn.Server(uvicorn.Config(executor.app, host="127.0.0.1", port=config["server"]["port"], log_level="warning"))
+        cls.uvicorn_server = uvicorn.Server(
+            uvicorn.Config(
+                executor.app,
+                host="127.0.0.1",
+                port=config["server"]["port"],
+                log_level="warning",
+            )
+        )
         cls.thread = threading.Thread(target=cls.uvicorn_server.run, daemon=True)
         cls.thread.start()
         cls.base_url = f"http://127.0.0.1:{config['server']['port']}"
@@ -131,277 +164,300 @@ class MultiHallTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.uvicorn_server.should_exit = True
         cls.thread.join(timeout=10)
-        cls.callback.close()
+        for collector in cls.callbacks.values():
+            collector.close()
         os.chdir(PROJECT_DIR)
 
     def setUp(self):
-        self.callback.requests.clear()
+        for collector in self.callbacks.values():
+            collector.requests.clear()
         self.fake_client.calls = 0
 
     def post_commands(self, payload, token=None):
         headers = {"Content-Type": "application/json"}
         if token is not None:
             headers["X-HC-Token"] = token
-        return requests.post(f"{self.base_url}/api/commands", headers=headers, json=payload, timeout=15)
+        return requests.post(
+            f"{self.base_url}/api/commands", headers=headers, json=payload, timeout=15
+        )
 
-    def context(self):
-        return {"callback": self.callback.url, "reply_to": "user@example.com", "agent": "context-agent"}
+    def context(self, hall=HALL_A, agent="context-agent"):
+        return {
+            "callback": self.callbacks[hall].url,
+            "reply_to": "user@example.com",
+            "agent": agent,
+            "groupchat": False,
+        }
+
+    def reset_payload(self, hall=HALL_A):
+        return {"context": self.context(hall), "commands": [{"action": "AI问答会话重置", "params": {}}]}
 
     def test_missing_invalid_and_unknown_token_are_rejected(self):
-        payload = {"context": self.context(), "commands": [{"action": "AI问答会话重置", "params": {}}]}
+        payload = self.reset_payload()
         for token in (None, "short", "unknown-token-0123456789"):
             response = self.post_commands(payload, token)
             self.assertEqual(response.status_code, 401)
             self.assertEqual(response.json(), {"ok": False, "error": "unauthorized"})
-        self.assertEqual(self.callback.requests, [])
+        self.assertEqual(sum(len(item.requests) for item in self.callbacks.values()), 0)
         self.assertEqual(self.fake_client.calls, 0)
 
-    def test_a_and_b_tokens_use_their_own_agent_and_callback_token(self):
-        for token, agent, callback_token in (
-            (TOKEN_A, AGENT_A, CALLBACK_TOKEN_A),
-            (TOKEN_B, AGENT_B, CALLBACK_TOKEN_B),
-        ):
-            self.callback.requests.clear()
-            response = self.post_commands(
-                {"context": self.context(), "commands": [{"action": "AI问答会话重置", "params": {}}]},
-                token,
-            )
+    def test_a_b_c_tokens_use_their_own_agent_ingress_port_and_token(self):
+        cases = (
+            (TOKEN_A, HALL_A, AGENT_A, INGRESS_TOKEN_A),
+            (TOKEN_B, HALL_B, AGENT_B, INGRESS_TOKEN_B),
+            (TOKEN_C, HALL_C, AGENT_C, INGRESS_TOKEN_C),
+        )
+        for token, hall, agent, ingress_token in cases:
+            for collector in self.callbacks.values():
+                collector.requests.clear()
+            response = self.post_commands(self.reset_payload(hall), token)
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(len(self.callback.requests), 1)
-            request = self.callback.requests[0]
+            self.assertEqual(len(self.callbacks[hall].requests), 1)
+            request = self.callbacks[hall].requests[0]
+            self.assertEqual(request["path"], "/agent/send")
             self.assertEqual(request["payload"]["agent"], agent)
             self.assertEqual(request["payload"]["to"], "user@example.com")
-            self.assertEqual(request["headers"].get("X-Auth-Token"), callback_token)
+            self.assertEqual(request["headers"].get("X-Auth-Token"), ingress_token)
+            for other in self.callbacks:
+                if other != hall:
+                    self.assertEqual(self.callbacks[other].requests, [])
 
     def test_body_exhibition_id_and_context_agent_cannot_override_token(self):
         response = self.post_commands(
             {
                 "exhibitionId": HALL_A,
-                "context": {**self.context(), "exhibitionId": HALL_A},
+                "context": {**self.context(HALL_B), "exhibitionId": HALL_A, "agent": "spoofed-agent"},
                 "commands": [{"action": "AI问答会话重置", "params": {}}],
             },
             TOKEN_B,
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(self.callback.requests), 1)
-        self.assertEqual(self.callback.requests[0]["payload"]["agent"], AGENT_B)
-        self.assertEqual(self.callback.requests[0]["headers"].get("X-Auth-Token"), CALLBACK_TOKEN_B)
+        self.assertEqual(self.callbacks[HALL_A].requests, [])
+        self.assertEqual(len(self.callbacks[HALL_B].requests), 1)
+        self.assertEqual(self.callbacks[HALL_B].requests[0]["payload"]["agent"], AGENT_B)
+        self.assertEqual(
+            self.callbacks[HALL_B].requests[0]["headers"].get("X-Auth-Token"), INGRESS_TOKEN_B
+        )
 
-    def test_concurrent_a_and_b_requests_keep_their_own_configuration(self):
+    def test_context_callback_cannot_point_at_another_hall(self):
+        response = self.post_commands(
+            {
+                "context": {**self.context(HALL_A), "callback": self.callbacks[HALL_B].url},
+                "commands": [{"action": "AI问答会话重置", "params": {}}],
+            },
+            TOKEN_A,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.callbacks[HALL_A].requests, [])
+        self.assertEqual(self.callbacks[HALL_B].requests, [])
+
+    def test_concurrent_a_b_c_requests_keep_their_own_configuration_and_sessions(self):
         results = []
 
-        def call(token):
-            response = self.post_commands(
-                {"context": self.context(), "commands": [{"action": "AI问答会话重置", "params": {}}]},
-                token,
-            )
+        def call(token, hall):
+            response = self.post_commands(self.reset_payload(hall), token)
             results.append(response.status_code)
 
-        threads = [threading.Thread(target=call, args=(token,)) for token in (TOKEN_A, TOKEN_B)]
+        threads = [
+            threading.Thread(target=call, args=(TOKEN_A, HALL_A)),
+            threading.Thread(target=call, args=(TOKEN_B, HALL_B)),
+            threading.Thread(target=call, args=(TOKEN_C, HALL_C)),
+        ]
         for item in threads:
             item.start()
         for item in threads:
             item.join()
 
-        self.assertEqual(results, [200, 200])
-        self.assertEqual(len(self.callback.requests), 2)
-        observed = {(item["payload"]["agent"], item["headers"].get("X-Auth-Token")) for item in self.callback.requests}
-        self.assertEqual(observed, {(AGENT_A, CALLBACK_TOKEN_A), (AGENT_B, CALLBACK_TOKEN_B)})
+        self.assertEqual(results, [200, 200, 200])
+        observed = {
+            hall: {(item["payload"]["agent"], item["headers"].get("X-Auth-Token")) for item in collector.requests}
+            for hall, collector in self.callbacks.items()
+        }
+        self.assertEqual(observed[HALL_A], {(AGENT_A, INGRESS_TOKEN_A)})
+        self.assertEqual(observed[HALL_B], {(AGENT_B, INGRESS_TOKEN_B)})
+        self.assertEqual(observed[HALL_C], {(AGENT_C, INGRESS_TOKEN_C)})
 
     def test_business_request_still_works_and_health_is_anonymous(self):
         response = self.post_commands(
-            {"context": self.context(), "commands": [{"action": "AI智能问答", "params": {"问题": "测试问题"}}]},
+            {"context": self.context(HALL_A), "commands": [{"action": "AI智能问答", "params": {"问题": "园区有多少建筑"}}]},
             TOKEN_A,
         )
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertTrue(body["ok"])
-        self.assertEqual(body["reply"], "答复-1")
+        self.assertEqual(body["reply"], "answer-1")
         self.assertEqual(self.fake_client.calls, 1)
-        self.assertEqual(len(self.callback.requests), 1)
+        self.assertEqual(len(self.callbacks[HALL_A].requests), 1)
+        self.assertEqual(self.callbacks[HALL_A].requests[0]["payload"]["body"], "answer-1")
 
         health = requests.get(f"{self.base_url}/api/health", timeout=10)
         self.assertEqual(health.status_code, 200)
         self.assertTrue(health.json()["ok"])
 
     def test_debug_chat_endpoint_remains_compatible(self):
-        response = requests.post(f"{self.base_url}/api/chat", json={"question": "联调问题"}, timeout=15)
+        response = requests.post(f"{self.base_url}/api/chat", json={"question": "园区有多少建筑"}, timeout=15)
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
-        self.assertEqual(self.callback.requests, [])
+        self.assertEqual(sum(len(item.requests) for item in self.callbacks.values()), 0)
 
     def test_session_isolation_between_exhibitions(self):
         executor = self.executor
-        self.assertEqual(executor._session_id({"reply_to": "u"}, HALL_A), "hall:exhibition-a:user:u")
-        self.assertEqual(executor._session_id({"reply_to": "u"}, HALL_B), "hall:exhibition-b:user:u")
-        self.assertNotEqual(
-            executor._session_id({}, HALL_A),
-            executor._session_id({}, HALL_B),
-        )
+        self.assertEqual(executor._session_id({"reply_to": "u"}, HALL_A), f"hall:{HALL_A}:user:u")
+        self.assertEqual(executor._session_id({"reply_to": "u"}, HALL_B), f"hall:{HALL_B}:user:u")
+        self.assertNotEqual(executor._session_id({}, HALL_A), executor._session_id({}, HALL_B))
         self.assertEqual(executor._session_id({}), "default")
 
-    def test_context_agent_cannot_override_hall_agent(self):
-        response = self.post_commands(
-            {
-                "context": {**self.context(), "agent": "spoofed-agent"},
-                "commands": [{"action": "AI问答会话重置", "params": {}}],
-            },
-            TOKEN_A,
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(self.callback.requests), 1)
-        self.assertEqual(self.callback.requests[0]["payload"]["agent"], AGENT_A)
-
-    def test_callback_allowlist_blocks_cross_hall_target(self):
+    def test_to_fallback_is_used_only_when_reply_to_is_missing(self):
         executor = self.executor
         original = executor.HALLS[HALL_A]
         try:
-            executor.HALLS[HALL_A] = {**original, "callback_allowlist": ["http://not-allowed.example/agent/send"]}
-            self.assertTrue(executor.callback_allowed("http://not-allowed.example/agent/send", executor.HALLS[HALL_A]["callback_allowlist"]))
-            self.assertFalse(executor.callback_allowed(self.callback.url, executor.HALLS[HALL_A]["callback_allowlist"]))
+            executor.HALLS[HALL_A] = {**original, "to": "fixed@example.net"}
+            executor.send_callback({"callback": self.callbacks[HALL_A].url}, "body", HALL_A)
+            self.assertEqual(len(self.callbacks[HALL_A].requests), 1)
+            self.assertEqual(self.callbacks[HALL_A].requests[0]["payload"]["to"], "fixed@example.net")
 
-            response = self.post_commands(
-                {"context": self.context(), "commands": [{"action": "AI问答会话重置", "params": {}}]},
-                TOKEN_A,
+            self.callbacks[HALL_A].requests.clear()
+            executor.send_callback(
+                {"callback": self.callbacks[HALL_A].url, "reply_to": "user@example.com"}, "body", HALL_A
             )
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(self.callback.requests, [])
+            self.assertEqual(self.callbacks[HALL_A].requests[0]["payload"]["to"], "user@example.com")
         finally:
             executor.HALLS[HALL_A] = original
 
-    def test_callback_allowlist_allows_configured_target(self):
-        executor = self.executor
-        original = executor.HALLS[HALL_A]
-        try:
-            executor.HALLS[HALL_A] = {**original, "callback_allowlist": [self.callback.url]}
-            response = self.post_commands(
-                {"context": self.context(), "commands": [{"action": "AI问答会话重置", "params": {}}]},
-                TOKEN_A,
-            )
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(len(self.callback.requests), 1)
-        finally:
-            executor.HALLS[HALL_A] = original
-
-    def test_third_hall_maps_to_its_own_agent_and_requires_complete_configuration(self):
-        executor = self.executor
-        token_map = executor.parse_token_map({TOKEN_A: HALL_A, TOKEN_B: HALL_B, TOKEN_C: HALL_C})
-        self.assertEqual(executor.resolve_exhibition_id(TOKEN_C, token_map), HALL_C)
-
-        allowlist = [self.callback.url]
-        original = executor.TOKEN_MAP
-        try:
-            executor.TOKEN_MAP = token_map
-            with self.assertRaisesRegex(ValueError, "missing configuration"):
-                executor.parse_halls({
-                    HALL_A: {"agent": AGENT_A, "callback_allowlist": allowlist},
-                    HALL_B: {"agent": AGENT_B, "callback_allowlist": allowlist},
-                })
-            halls = executor.parse_halls({
-                HALL_A: {"agent": AGENT_A, "callback_allowlist": allowlist},
-                HALL_B: {"agent": AGENT_B, "callback_allowlist": allowlist},
-                HALL_C: {"agent": AGENT_C, "callback_allowlist": allowlist},
-            })
-            self.assertEqual(halls[HALL_C]["agent"], AGENT_C)
-            self.assertEqual(halls[HALL_C]["callback_allowlist"], allowlist)
-        finally:
-            executor.TOKEN_MAP = original
-
-    def test_unconfigured_hall_cannot_fall_back_to_default_callback(self):
+    def test_unconfigured_hall_cannot_fall_back_to_another_hall(self):
         executor = self.executor
         original = dict(executor.HALLS)
         try:
             executor.HALLS.pop(HALL_C, None)
-            executor.send_callback(self.context(), "body", HALL_C)
-            self.assertEqual(self.callback.requests, [])
+            executor.send_callback(self.context(HALL_C), "body", HALL_C)
+            self.assertEqual(self.callbacks[HALL_C].requests, [])
         finally:
             executor.HALLS.clear()
             executor.HALLS.update(original)
 
-    def test_parse_halls_requires_agent_allowlist_and_complete_mapping(self):
+    def test_callback_matches_hall_requires_scheme_host_port_and_fixed_path(self):
         executor = self.executor
-        allowlist = ["http://allowed.example/agent/send"]
-        with self.assertRaisesRegex(ValueError, "agent is required"):
-            executor.parse_halls({HALL_A: {"agent": "", "callback_allowlist": allowlist}})
-        with self.assertRaisesRegex(ValueError, "callback_allowlist is required"):
-            executor.parse_halls({HALL_A: {"agent": AGENT_A}})
-        with self.assertRaisesRegex(ValueError, "callback_allowlist is required"):
-            executor.parse_halls({HALL_A: {"agent": AGENT_A, "callback_allowlist": []}})
-        with self.assertRaisesRegex(ValueError, "missing configuration"):
-            executor.parse_halls({HALL_A: {"agent": AGENT_A, "callback_allowlist": allowlist}})
-        with self.assertRaisesRegex(ValueError, "placeholder value"):
-            executor.parse_halls({
-                HALL_A: {"agent": "REPLACE_WITH_EXHIBITION_A_AGENT", "callback_allowlist": allowlist}
-            })
+        hall = executor.HALLS[HALL_A]
+        allowed = self.callbacks[HALL_A].url
+        self.assertTrue(executor.callback_matches_hall(allowed, hall))
+        self.assertFalse(executor.callback_matches_hall(allowed.replace("http://", "https://"), hall))
+        self.assertFalse(executor.callback_matches_hall(allowed.replace("127.0.0.1", "other.example"), hall))
+        self.assertFalse(executor.callback_matches_hall(allowed + "/extra", hall))
+        self.assertFalse(executor.callback_matches_hall(allowed.replace("/agent/send", "/other"), hall))
+        self.assertFalse(executor.callback_matches_hall("", hall))
+        self.assertFalse(executor.callback_matches_hall(allowed, {}))
 
-    def test_callback_allowlist_matches_scheme_host_port_and_path_prefix(self):
+    def test_parse_halls_requires_complete_per_hall_configuration(self):
         executor = self.executor
-        allowed = ["http://allowed.example:9000/agent/send"]
-        self.assertTrue(executor.callback_allowed("http://allowed.example:9000/agent/send", allowed))
-        self.assertTrue(executor.callback_allowed("http://allowed.example:9000/agent/send/extra", allowed))
-        self.assertFalse(executor.callback_allowed("https://allowed.example:9000/agent/send", allowed))
-        self.assertFalse(executor.callback_allowed("http://other.example:9000/agent/send", allowed))
-        self.assertFalse(executor.callback_allowed("http://allowed.example:9001/agent/send", allowed))
-        self.assertFalse(executor.callback_allowed("http://allowed.example:9000/agent/send2", allowed))
-        self.assertFalse(executor.callback_allowed("http://allowed.example:9000/other", allowed))
-        self.assertFalse(executor.callback_allowed("http://allowed.example:9000/agent/send", []))
-        self.assertTrue(executor.callback_allowed("http://allowed.example:80/agent/send", ["http://allowed.example/agent/send"]))
+        collectors = self.callbacks
+        base = hall_env(collectors)
+        for missing in (
+            f"HC_HALL_HC_C6N3R5_AGENT",
+            f"HC_HALL_HC_C6N3R5_INGRESS_HOST",
+            f"HC_HALL_HC_C6N3R5_INGRESS_PORT",
+            f"HC_HALL_HC_C6N3R5_INGRESS_TOKEN",
+        ):
+            with self.assertRaisesRegex(ValueError, missing):
+                executor.parse_halls({**base, missing: ""}, executor.TOKEN_MAP)
+
+        with self.assertRaisesRegex(ValueError, "INGRESS_PORT"):
+            executor.parse_halls(
+                {**base, "HC_HALL_HC_C6N3R5_INGRESS_PORT": "70000"}, executor.TOKEN_MAP
+            )
+        with self.assertRaisesRegex(ValueError, "without protocol or path"):
+            executor.parse_halls(
+                {**base, "HC_HALL_HC_C6N3R5_INGRESS_HOST": "http://127.0.0.1"}, executor.TOKEN_MAP
+            )
+        with self.assertRaisesRegex(ValueError, "placeholder"):
+            executor.parse_halls(
+                {**base, "HC_HALL_HC_C6N3R5_AGENT": "REPLACE_WITH_EXHIBITION_AGENT"},
+                executor.TOKEN_MAP,
+            )
+
+    def test_multi_hall_does_not_fall_back_to_legacy_global_ingress(self):
+        executor = self.executor
+        env = {
+            "HC_TOKEN_MAP": f"{TOKEN_A}:{HALL_A},{TOKEN_B}:{HALL_B}",
+            "AGENT": "legacy-agent",
+            "INGRESS_HOST": "127.0.0.1",
+            "INGRESS_PORT": "29876",
+            "INGRESS_TOKEN": "legacy-token",
+        }
+        token_map = executor.parse_token_map(env["HC_TOKEN_MAP"], label="HC_TOKEN_MAP")
+        with self.assertRaisesRegex(ValueError, "HC_HALL_HC_A7K9P2_AGENT"):
+            executor.parse_halls(env, token_map)
+
+    def test_single_hall_legacy_ingress_fallback_still_works(self):
+        executor = self.executor
+        env = {
+            "HC_TOKEN_MAP": f"{TOKEN_A}:{HALL_A}",
+            "AGENT": "legacy-agent",
+            "INGRESS_HOST": "127.0.0.1",
+            "INGRESS_PORT": "29876",
+            "INGRESS_TOKEN": "legacy-token",
+        }
+        token_map = executor.parse_token_map(env["HC_TOKEN_MAP"], label="HC_TOKEN_MAP")
+        halls = executor.parse_halls(env, token_map)
+        self.assertEqual(halls[HALL_A]["agent"], "legacy-agent")
+        self.assertEqual(halls[HALL_A]["ingress_port"], 29876)
+        self.assertEqual(halls[HALL_A]["ingress_url"], "http://127.0.0.1:29876/agent/send")
+
+    def test_shared_agent_and_ingress_target_are_rejected(self):
+        executor = self.executor
+        base = hall_env(self.callbacks)
+        with self.assertRaisesRegex(ValueError, "AGENT is shared"):
+            executor.parse_halls(
+                {**base, "HC_HALL_HC_B4M8Q1_AGENT": AGENT_A}, executor.TOKEN_MAP
+            )
+        with self.assertRaisesRegex(ValueError, "ingress target .* is shared"):
+            executor.parse_halls(
+                {
+                    **base,
+                    "HC_HALL_HC_B4M8Q1_INGRESS_HOST": self.callbacks[HALL_A].host,
+                    "HC_HALL_HC_B4M8Q1_INGRESS_PORT": str(self.callbacks[HALL_A].port),
+                },
+                executor.TOKEN_MAP,
+            )
 
     def test_placeholder_tokens_are_rejected(self):
         executor = self.executor
         with self.assertRaisesRegex(ValueError, "placeholder token"):
-            executor.parse_token_map({"REPLACE_WITH_EXHIBITION_A_TOKEN": HALL_A})
+            executor.parse_token_map({"REPLACE_WITH_EXHIBITION_A_TOKEN": HALL_A}, label="HC_TOKEN_MAP")
         with self.assertRaisesRegex(ValueError, "placeholder token"):
-            executor.parse_token_map({"example-token-a-0123456789abcdef": HALL_A})
+            executor.parse_token_map({"example-token-a-0123456789abcdef": HALL_A}, label="HC_TOKEN_MAP")
 
-    def test_startup_rejects_hall_without_agent(self):
-        temp_dir = tempfile.mkdtemp(prefix="hc-data-agent-bad-config-")
+    def test_startup_rejects_missing_token_map(self):
+        temp_dir = tempfile.mkdtemp(prefix="hc-data-agent-no-token-map-")
         config_path = os.path.join(temp_dir, "config.json")
         with open(config_path, "w", encoding="utf-8") as handle:
-            json.dump({
-                "server": {"host": "127.0.0.1", "port": 0},
-                "deepseek": {"api_key": "test-key"},
-                "exhibitions": {"token_map": {TOKEN_A: HALL_A}, "halls": {HALL_A: {}}},
-            }, handle)
+            json.dump({"server": {"host": "127.0.0.1", "port": 0}, "deepseek": {"api_key": "k"}}, handle)
 
-        env = {**os.environ, "EXECUTOR_CONFIG": config_path}
+        env = {key: value for key, value in os.environ.items() if key not in HALL_ENV_NAMES}
+        env["EXECUTOR_CONFIG"] = config_path
         code = f"import sys; sys.path.insert(0, {PROJECT_DIR!r}); import main"
         result = subprocess.run(
-            [sys.executable, "-c", code],
-            cwd=temp_dir,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=60,
+            [sys.executable, "-c", code], cwd=temp_dir, env=env,
+            capture_output=True, text=True, timeout=60,
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("agent is required", result.stderr)
+        self.assertIn("HC_TOKEN_MAP is required", result.stderr)
 
-    def test_startup_rejects_hall_without_callback_allowlist(self):
-        temp_dir = tempfile.mkdtemp(prefix="hc-data-agent-bad-allowlist-")
+    def test_startup_rejects_missing_hall_configuration(self):
+        temp_dir = tempfile.mkdtemp(prefix="hc-data-agent-bad-hall-")
         config_path = os.path.join(temp_dir, "config.json")
         with open(config_path, "w", encoding="utf-8") as handle:
-            json.dump({
-                "server": {"host": "127.0.0.1", "port": 0},
-                "deepseek": {"api_key": "test-key"},
-                "exhibitions": {
-                    "token_map": {TOKEN_A: HALL_A},
-                    "halls": {HALL_A: {"agent": AGENT_A}},
-                },
-            }, handle)
+            json.dump({"server": {"host": "127.0.0.1", "port": 0}, "deepseek": {"api_key": "k"}}, handle)
 
-        env = {**os.environ, "EXECUTOR_CONFIG": config_path}
+        env = {key: value for key, value in os.environ.items() if key not in HALL_ENV_NAMES}
+        env.update(hall_env(self.callbacks, {"HC_HALL_HC_C6N3R5_INGRESS_TOKEN": ""}))
+        env["EXECUTOR_CONFIG"] = config_path
         code = f"import sys; sys.path.insert(0, {PROJECT_DIR!r}); import main"
         result = subprocess.run(
-            [sys.executable, "-c", code],
-            cwd=temp_dir,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=60,
+            [sys.executable, "-c", code], cwd=temp_dir, env=env,
+            capture_output=True, text=True, timeout=60,
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("callback_allowlist is required", result.stderr)
+        self.assertIn("HC_HALL_HC_C6N3R5_INGRESS_TOKEN", result.stderr)
 
 
 if __name__ == "__main__":
