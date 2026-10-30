@@ -28,8 +28,5 @@
   },
   "sessions": {
     "max_history": 20
-  },
-  "callback": {
-    "token": "REPLACE_WITH_CALLBACK_X_AUTH_TOKEN_OR_LEAVE_EMPTY"
   }
 }

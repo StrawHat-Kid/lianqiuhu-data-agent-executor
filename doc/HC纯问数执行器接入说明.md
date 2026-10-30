@@ -12,8 +12,10 @@
 lianqiuhu-data-agent-executor/
   knowedge/                 # HC 正式数据后续放入此目录
   doc/                      # 接入、模板与 Postman 文档
-  config.example.json       # 可提交的脱敏示例
+  config.example.json       # 可提交的脱敏示例（服务/模型/知识库）
   config.json               # 仅本机/部署环境使用，已被 Git 忽略
+  .env.example              # 多展厅配置示例（可提交）
+  .env                      # 真实展厅配置，已被 Git 忽略
   main.py
   deepseek_client.py
   file_store.py
@@ -34,7 +36,38 @@ lianqiuhu-data-agent-executor/
 
 首次部署时，将 `config.example.json` 复制为 `config.json`，再填写部署环境提供的 SiliconFlow API Key。不得提交真实 Key。当前模型服务商为 SiliconFlow（硅基流动），OpenAI Compatible Base URL 为 `https://api.siliconflow.cn/v1`，模型为 `deepseek-ai/DeepSeek-V4-Flash`。原 DeepSeek 官方 API 不再作为当前 HC 调用地址。默认监听为 `0.0.0.0:18034`。
 
-`callback.token` 只用于执行器向 `context.callback` 回传结果时的 `X-Auth-Token`。它不是产品侧 INGRESS_TOKEN；当前执行器代码没有实现入站 INGRESS_TOKEN 鉴权。
+### 多展厅 Token 鉴权与回程配置（必填）
+
+`POST /api/commands` 必须携带 `X-HC-Token`，服务端按环境变量 `HC_TOKEN_MAP` 精确映射展厅。展厅配置只来自环境变量（可写入项目根目录 `.env`），不再读取 `config.json` 的 `exhibitions`：
+
+```dotenv
+HC_TOKEN_MAP=<A展厅Token>:HC-A7K9P2,<B展厅Token>:HC-B4M8Q1,<C展厅Token>:HC-C6N3R5
+
+HC_HALL_HC_A7K9P2_AGENT=<A展厅Agent>
+HC_HALL_HC_A7K9P2_INGRESS_HOST=<A回程主机>
+HC_HALL_HC_A7K9P2_INGRESS_PORT=<A回程端口>
+HC_HALL_HC_A7K9P2_INGRESS_TOKEN=<A回程Token>
+HC_HALL_HC_A7K9P2_TO=<A接收方JID>
+
+HC_HALL_HC_B4M8Q1_AGENT=<B展厅Agent>
+HC_HALL_HC_B4M8Q1_INGRESS_HOST=<B回程主机>
+HC_HALL_HC_B4M8Q1_INGRESS_PORT=<B回程端口>
+HC_HALL_HC_B4M8Q1_INGRESS_TOKEN=<B回程Token>
+HC_HALL_HC_B4M8Q1_TO=<B接收方JID>
+```
+
+- 变量名规则：`HC_HALL_` + 展厅 ID 转大写、非字母数字转 `_`。展厅数量不写死，按 `HC_TOKEN_MAP` 动态展开。
+- 缺失、无效或未映射的 Token 一律返回 `401 {"ok":false,"error":"unauthorized"}`，不回退到任何展厅。
+- 每个展厅必须提供 `AGENT`、`INGRESS_HOST`、`INGRESS_PORT`、`INGRESS_TOKEN`；缺失任一项执行器启动失败，不会回退到其他展厅。
+- 入站 Token（`HC_TOKEN_MAP` 左侧）与回程 Token（`HC_HALL_*_INGRESS_TOKEN`）是两种不同凭据。
+- 回程 Agent 只取展厅配置，请求 `context.agent` 不可覆盖；Body `exhibitionId` 也会被忽略。
+- 回程地址由服务端固定为 `http://<INGRESS_HOST>:<INGRESS_PORT>/agent/send`；请求 `context.callback` 必须与协议、主机、端口和 `/agent/send` 路径完全一致才放行，否则拒绝回程并记录日志。
+- 不同展厅的 `AGENT` 与 `INGRESS_HOST:PORT` 不得重复；重复会启动失败，避免串展厅。
+- 示例占位值（Token、Agent 或 Ingress 主机，`REPLACE_WITH_*`、`example-*`、`change-me-*`）会被启动校验拒绝，必须替换为真实值。
+- 会话按展厅分桶（`hall:<展厅>:` 前缀），不同展厅不共用历史；`HC_TOKEN_MAP` 缺失或非法时执行器启动失败。
+- `X-HC-Token` 只影响 `/api/commands`；`/api/health` 与本地联调接口保持原有行为。
+- 旧 `config.json` 中的 `exhibitions` 与 `callback.token` 已停用并忽略；如仍存在，启动日志会告警，请迁移后从 `config.json` 删除。
+- 仅当 `HC_TOKEN_MAP` 只映射一个展厅时，旧全局 `AGENT` / `INGRESS_HOST` / `INGRESS_PORT` / `INGRESS_TOKEN` 才作为该展厅的兼容兜底；多展厅模式忽略。
 
 ## 本地启动与健康检查
 
@@ -95,20 +128,21 @@ Linux 可在安装依赖后，从项目根目录执行 `python main.py`。相对
 
 ```json
 {
-  "agent": "产品侧传入的 agent",
-  "to": "context.reply_to",
+  "agent": "该展厅 HC_HALL_*_AGENT",
+  "to": "context.reply_to 或该展厅 HC_HALL_*_TO",
   "body": "完整回答文本",
   "groupchat": false
 }
 ```
 
-若 `config.json` 配置了 `callback.token`，请求 Header 为 `X-Auth-Token: <callback.token>`。产品侧 callback 地址必须能被执行器访问。
+请求 Header 固定为该展厅的 `X-Auth-Token: <HC_HALL_展厅_INGRESS_TOKEN>`，POST 目标固定为 `http://<HC_HALL_展厅_INGRESS_HOST>:<HC_HALL_展厅_INGRESS_PORT>/agent/send`。请求中的 `context.callback` 只用于一致性校验，不能改变回程目标；不一致时拒绝回程并记录日志。
 
 ## 产品侧注册要点
 
 - transport：`http`
 - method：`POST`
 - endpoint：`http://<执行器可达地址>:18034/api/commands`
+- 请求 Header 必须携带 `X-HC-Token: <该展厅Token>`；缺失或未映射返回 401。
 - command 名称必须与 `AI智能问答`、`AI问答会话重置` 完全一致。
 - 如需回程，产品侧传入上述 context 信封。
 - 上游 SiliconFlow 可流式读取，但本执行器对产品侧返回的是普通 HTTP JSON，不提供对外 SSE。
